@@ -1,0 +1,288 @@
+Function CS_JSON_LIB(inMethod, Param1, Param2, Param3, Param4, outValue,outStat)
+/*
+	Function: CS_JSON_LIB
+	
+>CS_JSON_LIB(inMethod, Param1, Param2, Param3, Param4, outValue,outStat)	
+
+Utility library For serializing And deserializing records as JSON records. Uses RTI_JSON
+And supports records down To the SVM.
+
+	Parameters:
+	inMethod - Varies depending On action.
+	Param1...Param4 - Varies depending On inMethod.
+	outValue - Unused. Optional Return value by reference.
+	outStat - Unused. Optional Return status by reference.
+	
+Revisions:
+- History	(Date, Initials, Notes)
+- 
+
+*/
+If Unassigned(inMethod) Then method = '' Else method = inMethod
+If Unassigned(Param1) Then Param1 = ''
+If Unassigned(Param2) Then Param2 = ''
+If Unassigned(Param3) Then Param3 = ''
+If Unassigned(Param4) Then Param4 = ''
+If Unassigned(outValue) Then outValue = ''
+If Unassigned(outStat) Then outStat = ''
+RetVal = ''
+
+*
+* Declare System
+Declare Function Assigned, Msg, CS_JSON_LIB, RTI_JSON
+Declare Subroutine Msg, CS_JSON_LIB, RTI_JSON
+
+$INSERT Msg_Equates
+$Insert Logical
+
+*
+*Main case branch
+*
+A_CommuterModuleTop:
+Begin Case
+	
+	Case Method _eqc 'serializeRecArray'		; Gosub serializeRecArray_
+	Case Method _eqc 'deserializeRecArray'		; Gosub deserializeRecArray_
+	
+	Case Method _eqc 'showUsageExample'			; Gosub showUsageExample_
+
+	Case Otherwise$
+	
+		A_CommuterModuleOtherwise:
+		
+			CS_JSON_LIB('showUsageExample')
+			
+	Goto End
+End Case
+
+End:
+Return RetVal
+*
+*End of the main branch
+*
+
+/*
+	interface: showUsageExample
+	
+	Simple usage example showing how To serialize And deserialize a record.
+	
+	>CS_JSON_LIB('showUsageExample')
+	Or
+	>RUN CS_JSON_LIB 'showUsageExample'
+	
+	Parameters:
+	None
+	
+	Returns:
+	None - Displays debugger Or Msg box depending On result.
+	
+*/
+showUsageExample_:
+
+	*Use a sample record that should be in most OI systems.
+	Rec = Xlate('SYSENV','CFG_BRW','','X')
+	If Rec EQ '' Then
+		Msg('Please specify another record to use as a sample')
+		Return
+	End
+	
+	*Return the record as a JSON Object
+	RecO = CS_JSON_LIB('serializeRecArray',Rec)
+	
+	*Turn the record into a string
+	ROString = RTI_JSON(RecO,'Stringify')
+	
+	*Save the record to a file, optional.
+	*OSWrite ROString To 'C:\TEMP\Test.Json'
+	
+	*Turn the string back into a record
+	RecReverse = CS_JSON_LIB('deserializeRecArray',ROString)
+	
+	*
+	*The original record should match our de-serialized record
+	*
+	If RecReverse EQ Rec Then
+		Msg("The record was serialized as JSON and deserialized successfully.")
+	End Else
+		Msg("Something went wrong, the deserialized record does not match the original.")
+	End
+
+Return
+
+/*
+	interface: serializeRecArray
+	
+	Given an OpenInsight record it will Return a JSON array of arrays as deep as the SVM level.
+	
+	>CS_JSON_LIB('serializeRecArray', Record)
+	
+	Parameters:
+	Record - Any record Or array.
+	
+	Returns:
+	RTI_JSON Object
+	
+*/
+serializeRecArray_:
+	
+	Rec = Param1
+	
+	*How many field marks to we loop through?
+	FMCount = DCOUNT(Rec,@FM)
+	
+	*Field marks stored in FO
+	FO = RTI_JSON('','New','ARRAY')
+	For f = 1 To FMCount
+		FMVal = Rec<f>
+		
+		*Check if this field has multiple values
+		VMCount = DCOUNT(FMVal, @VM)
+		If VMCount GT 1 Then
+			*Yes, we have multiple values
+			
+			*Make an JSON array to hold the current field values
+			VO = RTI_JSON('','New','ARRAY')
+			For v = 1 To VMCount
+				VMVal = FMVal<1,v>
+				
+				*Does this field have sub-values?
+				SVMCount = DCOUNT(VMVal,@SVM)
+				If SVMCount GT 1 Then
+					*Yes, we have sub-values in this field
+					
+					*Hold sub-values in a separate JSON array for inclusion in value array
+					SVO = RTI_JSON('','New','ARRAY')
+					For sv = 1 To SVMCount
+						*Each sub-value will be stored in an array and then saved in the value array
+						RTI_JSON(SVO,'SetValue','[' : (sv-1) : ']', VMVal<1,1,sv>)	
+					Next sv
+					
+					*All done collecting sub-values. Store those sub-values in the value array
+					RTI_JSON(VO,'SetObject','[' : (v-1) : ']', SVO, 1)
+					SVO = ''
+					
+				End Else
+					*There are no sub-values in this value so we can store it.
+					RTI_JSON(VO,'SetValue','[' : (v-1) : ']', VMVal)	
+				End
+				
+			Next v
+			
+			*All dont collecting values. Store those values in the field array
+			RTI_JSON(FO,'SetObject','[' : (f-1) : ']', VO, 1)
+			VO = ''
+			
+		End Else
+			*No multi-values so store the value
+			RTI_JSON(FO,'SetValue','[' : (f-1) : ']', FMVal)
+		End
+		
+	Next f
+	
+	*Store all the collected arrays in an object (named value pair)
+	RO = RTI_JSON('','New','OBJECT')
+	RTI_JSON(RO,'SetObject','rec', FO, 1)
+	FO = ''
+	
+	*Return the reference to our object.
+	RetVal = RO
+	
+Return
+
+/*
+	interface: deserializeRecArray
+	
+	Opposite of serializeRecArray. Turns the serialized string back into a record.
+	
+	>CS_JSON_LIB('deserializeRecArray', RecordString)
+	
+	Parameters:
+	RecordString - A record In string form that was serialized using serializeRecArray.
+	
+	Returns:
+	Record - Standard OI record.
+	
+*/
+deserializeRecArray_:
+
+	Rec = ''
+	
+	JString = Param1
+	
+	*Turn the string into a JSON object
+	RWrapper = RTI_JSON(JString,'PARSE')
+	
+	*Get the array of arrays that represents the record
+	FO = RTI_JSON(RWrapper,'GetValue','rec')
+	
+	*Get the key values from the field mark level
+	Fi = RTI_JSON(FO,'GetProperties')
+	
+	*Find the number of fields in the array
+	FiCount = DCOUNT(Fi,@FM)
+	For F = 1 To FiCount
+		*For each field get it's value
+		FVal = RTI_JSON(FO,'GetValue', '[' : Fi<F> : ']')
+		
+		*If thie field value is an object then there are values and sub-values
+		FValIsObj = RTI_JSON(FVal, 'IsObject')
+		
+		If FValIsObj Then
+			*Multiple values are present
+			
+			FValRec = '' ;* Hold the multiple values here for joinging into the main record
+			
+			*Count the number of multiple values
+			Vi = RTI_JSON(FVal,'GetProperties')
+			ViCount = DCount(Vi,@FM)
+			
+			For V = 1 To ViCount
+				*get one of the multiple values
+				VMVal = RTI_JSON(FVal,'GetValue','[' : Vi<V> : ']')
+				
+				*See if this value has sub-values
+				VMValIsObj = RTI_JSON(VMVal,'IsObject')
+				
+				If VMValIsObj Then
+					*Yes, we have sub-values
+					SVMValRec = ''
+					
+					*How many sub-values?
+					SVi = RTI_JSON(VMVal,'GetProperties')
+					SViCount = DCOUNT(SVi,@FM)
+					
+					For SV = 1 To SViCount
+						*Put each sub-value in a separate array
+						SVMValRec<1,1,(SVi<SV> + 1)> = RTI_JSON(VMVal,'GetValue','[' : SVi<SV> :']')
+					Next SV
+					
+					*Join all of the sub-values into the multi-value field array
+					FValRec<1, (Vi<V> + 1)> = SVMValRec
+					SVMValRec = ''
+				
+				End Else
+					*There are no sub-values so we store this value and move on
+					FValRec<1,(Vi<V> + 1)> = VMVal
+				End
+				
+			Next V
+			
+			*Store all the multi-values into the field mark array
+			Rec<(Fi<F> + 1)> = FValRec
+			FValRec = ''
+			
+		End Else
+			*No multi-values so store the single value
+			Rec<(Fi<F> + 1)> = FVal
+		ENd
+		
+	Next F
+	
+	*Return the completed record
+	RetVal = Rec
+	
+Return
+
+/*
+#AUTO_GENERATE_DOCS
+*/
